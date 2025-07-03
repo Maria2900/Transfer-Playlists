@@ -1,0 +1,120 @@
+import os
+import re
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+from googleapiclient.discovery import build
+
+# Configurações
+YOUTUBE_API_KEY = 'AIzaSyCzGEfJZYw2aejDWN42w0PvDraoUjGQFoo'
+SPOTIFY_CLIENT_ID = '64a8b6bbcc0743fc8017a86fd04b2eee'
+SPOTIFY_CLIENT_SECRET = '2dd063b709d944f6b8e50ca04b78dec5'
+SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8888/callback'
+
+# === PLAYLIST ===
+URL_PLAYLIST_YOUTUBE = "https://youtube.com/playlist?list=PL_Q15fKxrBb4Epms1Mp3cUQX6Whmp7eQ5&si=SO3k2y7BvHlrJujn"
+NOME_PLAYLIST_SPOTIFY = "Ultimos Lançamentos Sertanejos Maio 2025 - Top Lançamentos Sertanejo 2025"
+
+def extrair_id_playlist_youtube(url):
+    match = re.search(r'list=([a-zA-Z0-9_-]+)', url)
+    return match.group(1) if match else None
+
+def obter_videos_playlist_youtube(playlist_id):
+    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    videos = []
+    next_page_token = None
+    
+    while True:
+        request = youtube.playlistItems().list(
+            part='snippet',
+            playlistId=playlist_id,
+            maxResults=50,
+            pageToken=next_page_token
+        )
+        response = request.execute()
+        
+        for item in response['items']:
+            titulo = item['snippet']['title']
+            videos.append(titulo)
+        
+        next_page_token = response.get('nextPageToken')
+        if not next_page_token:
+            break
+    
+    return videos
+
+def conectar_spotify():
+    scope = "playlist-modify-public playlist-modify-private"
+    return spotipy.Spotify(auth_manager=SpotifyOAuth(
+        client_id=SPOTIFY_CLIENT_ID,
+        client_secret=SPOTIFY_CLIENT_SECRET,
+        redirect_uri=SPOTIFY_REDIRECT_URI,
+        scope=scope
+    ))
+
+def limpar_titulo_musica(titulo):
+    titulo = re.sub(r'\s*\([^)]*\)', '', titulo)
+    titulo = re.sub(r'\s*\[[^\]]*\]', '', titulo)
+    titulo = re.sub(r'\s*(official|video|music|audio|hd|hq)\s*', '', titulo, flags=re.IGNORECASE)
+    return titulo.strip()
+
+def buscar_musica_spotify(sp, titulo):
+    titulo_limpo = limpar_titulo_musica(titulo)
+    resultados = sp.search(q=titulo_limpo, type='track', limit=1)
+    
+    if resultados['tracks']['items']:
+        return resultados['tracks']['items'][0]['id']
+    
+    palavras = titulo_limpo.split()
+    if len(palavras) > 2:
+        busca_reduzida = ' '.join(palavras[:2])
+        resultados = sp.search(q=busca_reduzida, type='track', limit=1)
+        if resultados['tracks']['items']:
+            return resultados['tracks']['items'][0]['id']
+    
+    return None
+
+def criar_playlist_spotify(sp, nome, descricao="Transferida do YouTube"):
+    user_id = sp.current_user()['id']
+    playlist = sp.user_playlist_create(user_id, nome, public=False, description=descricao)
+    return playlist['id']
+
+def transferir_playlist(url_youtube, nome_playlist_spotify):
+    playlist_id = extrair_id_playlist_youtube(url_youtube)
+    if not playlist_id:
+        print("URL da playlist do YouTube inválida")
+        return
+    
+    print(f"Obtendo vídeos da playlist do YouTube...")
+    videos = obter_videos_playlist_youtube(playlist_id)
+    print(f"Encontrados {len(videos)} vídeos")
+    
+    sp = conectar_spotify()
+    playlist_spotify_id = criar_playlist_spotify(sp, nome_playlist_spotify)
+    print(f"Playlist criada no Spotify: {nome_playlist_spotify}")
+    
+    track_ids = []
+    encontradas = 0
+    
+    for i, titulo in enumerate(videos, 1):
+        print(f"Buscando {i}/{len(videos)}: {titulo[:50]}...")
+        track_id = buscar_musica_spotify(sp, titulo)
+        
+        if track_id:
+            track_ids.append(track_id)
+            encontradas += 1
+            print(f"✓ Encontrada")
+        else:
+            print(f"✗ Não encontrada")
+    
+    if track_ids:
+        for i in range(0, len(track_ids), 100):
+            batch = track_ids[i:i+100]
+            sp.playlist_add_items(playlist_spotify_id, batch)
+    
+    print(f"\nTransferência concluída!")
+    print(f"Músicas encontradas: {encontradas}/{len(videos)}")
+    print(f"Taxa de sucesso: {(encontradas/len(videos)*100):.1f}%")
+
+# === EXECUÇÃO DIRETA ===
+if __name__ == "__main__":
+    transferir_playlist(URL_PLAYLIST_YOUTUBE, NOME_PLAYLIST_SPOTIFY)
