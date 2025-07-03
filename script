@@ -2,27 +2,45 @@ import os
 import re
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from dotenv import load_dotenv
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# Configurações
-YOUTUBE_API_KEY = 'AIzaSyCzGEfJZYw2aejDWN42w0PvDraoUjGQFoo'
-SPOTIFY_CLIENT_ID = '64a8b6bbcc0743fc8017a86fd04b2eee'
-SPOTIFY_CLIENT_SECRET = '2dd063b709d944f6b8e50ca04b78dec5'
-SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8888/callback'
+load_dotenv()
 
-# === PLAYLIST ===
-URL_PLAYLIST_YOUTUBE = "https://youtube.com/playlist?list=PL_Q15fKxrBb4Epms1Mp3cUQX6Whmp7eQ5&si=SO3k2y7BvHlrJujn"
-NOME_PLAYLIST_SPOTIFY = "Ultimos Lançamentos Sertanejos Maio 2025 - Top Lançamentos Sertanejo 2025"
+# === CREDENCIAIS ===
+YOUTUBE_CLIENT_SECRET_JSON = r"C:\Users\Maria Clara\Desktop\Scripts\transfer_playlist\client_secret_3561445089-bnlju4djtgj8btpkrkhppsp8fj98v4m5.apps.googleusercontent.com.json"
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
+
+# === CONFIGURAÇÃO ===
+DIRECAO = 'spotify_to_yt'  # 'yt_to_spotify' ou 'spotify_to_yt'
+URL_PLAYLIST_YOUTUBE = "https://youtube.com/playlist?list=SEU_ID_AQUI"
+NOME_PLAYLIST_SPOTIFY = "Nome da Playlist no Spotify"
+URL_PLAYLIST_SPOTIFY = "https://open.spotify.com/playlist/30eqrwAdj5vxvE6faMBqIm?si=EYoot42fSFCaTAEqaBJvSQ&pi=mMj9w7hQQquzq"
+NOME_PLAYLIST_YOUTUBE = "Gospel - 2025"
+
+# === AUTENTICAÇÃO YOUTUBE ===
+def autenticar_youtube():
+    SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
+    flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRET_JSON, SCOPES)
+    credentials = flow.run_local_server(port=0)
+    youtube = build("youtube", "v3", credentials=credentials)
+    return youtube
 
 def extrair_id_playlist_youtube(url):
     match = re.search(r'list=([a-zA-Z0-9_-]+)', url)
     return match.group(1) if match else None
 
+def extrair_id_playlist_spotify(url):
+    match = re.search(r'playlist/([a-zA-Z0-9]+)', url)
+    return match.group(1) if match else None
+
 def obter_videos_playlist_youtube(playlist_id):
-    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    youtube = build('youtube', 'v3', developerKey=os.getenv("YOUTUBE_API_KEY"))
     videos = []
     next_page_token = None
-    
     while True:
         request = youtube.playlistItems().list(
             part='snippet',
@@ -31,24 +49,22 @@ def obter_videos_playlist_youtube(playlist_id):
             pageToken=next_page_token
         )
         response = request.execute()
-        
         for item in response['items']:
             titulo = item['snippet']['title']
             videos.append(titulo)
-        
         next_page_token = response.get('nextPageToken')
         if not next_page_token:
             break
-    
     return videos
 
 def conectar_spotify():
-    scope = "playlist-modify-public playlist-modify-private"
+    scope = "playlist-modify-public playlist-modify-private playlist-read-private"
     return spotipy.Spotify(auth_manager=SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=SPOTIFY_REDIRECT_URI,
-        scope=scope
+        scope=scope,
+        cache_path=".cache/token.txt"
     ))
 
 def limpar_titulo_musica(titulo):
@@ -60,17 +76,14 @@ def limpar_titulo_musica(titulo):
 def buscar_musica_spotify(sp, titulo):
     titulo_limpo = limpar_titulo_musica(titulo)
     resultados = sp.search(q=titulo_limpo, type='track', limit=1)
-    
     if resultados['tracks']['items']:
         return resultados['tracks']['items'][0]['id']
-    
     palavras = titulo_limpo.split()
     if len(palavras) > 2:
         busca_reduzida = ' '.join(palavras[:2])
         resultados = sp.search(q=busca_reduzida, type='track', limit=1)
         if resultados['tracks']['items']:
             return resultados['tracks']['items'][0]['id']
-    
     return None
 
 def criar_playlist_spotify(sp, nome, descricao="Transferida do YouTube"):
@@ -78,43 +91,137 @@ def criar_playlist_spotify(sp, nome, descricao="Transferida do YouTube"):
     playlist = sp.user_playlist_create(user_id, nome, public=False, description=descricao)
     return playlist['id']
 
-def transferir_playlist(url_youtube, nome_playlist_spotify):
-    playlist_id = extrair_id_playlist_youtube(url_youtube)
+def transferir_playlist_youtube_para_spotify():
+    playlist_id = extrair_id_playlist_youtube(URL_PLAYLIST_YOUTUBE)
     if not playlist_id:
         print("URL da playlist do YouTube inválida")
         return
-    
     print(f"Obtendo vídeos da playlist do YouTube...")
     videos = obter_videos_playlist_youtube(playlist_id)
     print(f"Encontrados {len(videos)} vídeos")
-    
+
     sp = conectar_spotify()
-    playlist_spotify_id = criar_playlist_spotify(sp, nome_playlist_spotify)
-    print(f"Playlist criada no Spotify: {nome_playlist_spotify}")
-    
+    playlist_spotify_id = criar_playlist_spotify(sp, NOME_PLAYLIST_SPOTIFY)
+    print(f"Playlist criada no Spotify: {NOME_PLAYLIST_SPOTIFY}")
+
     track_ids = []
     encontradas = 0
-    
     for i, titulo in enumerate(videos, 1):
         print(f"Buscando {i}/{len(videos)}: {titulo[:50]}...")
         track_id = buscar_musica_spotify(sp, titulo)
-        
         if track_id:
             track_ids.append(track_id)
             encontradas += 1
             print(f"✓ Encontrada")
         else:
             print(f"✗ Não encontrada")
-    
+
     if track_ids:
         for i in range(0, len(track_ids), 100):
-            batch = track_ids[i:i+100]
+            batch = track_ids[i:i + 100]
             sp.playlist_add_items(playlist_spotify_id, batch)
-    
+
     print(f"\nTransferência concluída!")
     print(f"Músicas encontradas: {encontradas}/{len(videos)}")
-    print(f"Taxa de sucesso: {(encontradas/len(videos)*100):.1f}%")
+    print(f"Taxa de sucesso: {(encontradas / len(videos) * 100):.1f}%")
 
-# === EXECUÇÃO DIRETA ===
+# =============== SPOTIFY → YOUTUBE ===============
+
+def obter_faixas_playlist_spotify(sp, playlist_id):
+    tracks = []
+    results = sp.playlist_items(playlist_id, limit=100)
+    while results:
+        for item in results['items']:
+            track = item['track']
+            if track:
+                nome = f"{track['name']} {track['artists'][0]['name']}"
+                tracks.append(nome)
+        if results['next']:
+            results = sp.next(results)
+        else:
+            break
+    return tracks
+
+def buscar_video_youtube_por_nome(nome_musica):
+    youtube = autenticar_youtube()
+    request = youtube.search().list(
+        part='snippet',
+        q=nome_musica,
+        maxResults=1,
+        type='video'
+    )
+    response = request.execute()
+    itens = response.get("items", [])
+    if itens:
+        return itens[0]['id']['videoId']
+    return None
+
+def criar_playlist_youtube(nome, descricao="Transferida do Spotify"):
+    youtube = autenticar_youtube()
+    request = youtube.playlists().insert(
+        part='snippet,status',
+        body={
+            'snippet': {
+                'title': nome,
+                'description': descricao
+            },
+            'status': {
+                'privacyStatus': 'private'
+            }
+        }
+    )
+    response = request.execute()
+    return response['id']
+
+def adicionar_video_na_playlist_youtube(playlist_id, video_id):
+    youtube = autenticar_youtube()
+    youtube.playlistItems().insert(
+        part='snippet',
+        body={
+            'snippet': {
+                'playlistId': playlist_id,
+                'resourceId': {
+                    'kind': 'youtube#video',
+                    'videoId': video_id
+                }
+            }
+        }
+    ).execute()
+
+def transferir_playlist_spotify_para_youtube():
+    sp = conectar_spotify()
+    print(f"Obtendo faixas da playlist do Spotify...")
+    playlist_id = extrair_id_playlist_spotify(URL_PLAYLIST_SPOTIFY)
+    if not playlist_id:
+       print("URL da playlist do Spotify inválida")
+       return
+
+    musicas = obter_faixas_playlist_spotify(sp, playlist_id)
+    print(f"Encontradas {len(musicas)} faixas")
+
+    playlist_id = criar_playlist_youtube(NOME_PLAYLIST_YOUTUBE)
+    print(f"Playlist criada no YouTube: {NOME_PLAYLIST_YOUTUBE}")
+
+    adicionadas = 0
+    for i, musica in enumerate(musicas, 1):
+        print(f"Buscando {i}/{len(musicas)}: {musica[:50]}...")
+        video_id = buscar_video_youtube_por_nome(musica)
+        if video_id:
+            adicionar_video_na_playlist_youtube(playlist_id, video_id)
+            adicionadas += 1
+            print("✓ Adicionado")
+        else:
+            print("✗ Não encontrado")
+
+    print(f"\nTransferência concluída!")
+    print(f"Vídeos adicionados: {adicionadas}/{len(musicas)}")
+    print(f"Taxa de sucesso: {(adicionadas / len(musicas) * 100):.1f}%")
+
+# =============== EXECUÇÃO ===============
 if __name__ == "__main__":
-    transferir_playlist(URL_PLAYLIST_YOUTUBE, NOME_PLAYLIST_SPOTIFY)
+    if DIRECAO == 'yt_to_spotify':
+        transferir_playlist_youtube_para_spotify()
+    elif DIRECAO == 'spotify_to_yt':
+        transferir_playlist_spotify_para_youtube()
+    else:
+        print("Direção inválida! Use 'yt_to_spotify' ou 'spotify_to_yt'")
